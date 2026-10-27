@@ -1,6 +1,6 @@
 import express from "express";
+import type { Response } from "express";
 import dotenv from "dotenv";
-import rateLimit from "express-rate-limit";
 import { supabase } from "./supabase.js";
 
 dotenv.config();
@@ -8,22 +8,29 @@ dotenv.config();
 const app = express();
 app.use(express.json()); // read JSON request bodies
 
-// Level 5: Global Rate Limiting (10 requests per minute)
-const limiter = rateLimit({
-  windowMs: 60 * 10000, //1 minute window
-  max: 10, //limit each IP to 10 requests per window
-  message: { error: "Too many requests, please try again later." },
-  standardHeaders: true, //return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, //disable the `X-RateLimit-*` headers
-});
+const WINDOW_MS = 60_000;
+const MAX_ATTEMPTS = 5;
+const attempts = new Map<string, number[]>(); //email > timestamps of recent attempts
 
-app.use(limiter);
+const checkRateLimit = (email: string): number => {
+  const now = Date.now();
+  const recent = (attempts.get(email) ?? []).filter((t) => now - t < WINDOW_MS);
+
+  if (recent.length >= MAX_ATTEMPTS) {
+    attempts.set(email, recent);
+    return Math.ceil((recent[0] + WINDOW_MS - now) / 1000);
+  }
+
+  recent.push(now);
+  attempts.set(email, recent);
+  return 0;
+};
 
 const PORT = process.env.PORT || 3000;
 
 //postgres returns "2026-12-10T09:00:00+00:00", our spec wants "2026-12-10T09:00:00Z"
 const toSpecDate = (value: string) =>
-  new Date(value).toString().replace(".000Z", "Z");
+  new Date(value).toISOString().replace(".000Z", "Z");
 
 //booking object from the spec
 const toBooking = (row: {
@@ -42,14 +49,45 @@ const toBooking = (row: {
   created_at: new Date(row.created_at).toISOString(),
 });
 
+//An existing booking has this Idempotency-Key
+//same body? replay it. Different body? reject with 422
+const replayOrReject = (
+  res: Response,
+  existing: any,
+  body: { slot_id: string; name: string; email: string },
+) => {
+  const sameBody =
+    existing.slot_id === body.slot_id &&
+    existing.name === body.name &&
+    existing.email === body.email;
+
+  if (sameBody) {
+    return res.status(201).json(toBooking(existing));
+  }
+  return res
+    .status(422)
+    .json({ error: "Idempotency-Key reused with a different body" });
+};
+
 app.get("/health", (req, res) => {
   res.json({ status: "API is running" });
+});
+
+// Level 2: API Key Middleware (applies to all routes below this point)
+app.use((req, res, next) => {
+  const apiKey = req.header("X-API-Key");
+
+  if (!apiKey || apiKey !== process.env.API_KEY) {
+    return res.status(401).json({ error: "Missing or invalid API key" });
+  }
+  next();
 });
 
 // Level 1: POST /reset - Delete all bookings and replace all slots
 app.post("/reset", async (req, res) => {
   try {
     const { slots } = req.body ?? {};
+    attempts.clear();
 
     // deleting all existing bookings
     const { error: bookingDeleteError } = await supabase
@@ -102,16 +140,6 @@ app.post("/reset", async (req, res) => {
   }
 });
 
-// Level 2: API Key Middleware (applies to all routes below this point)
-app.use((req, res, next) => {
-  const apiKey = req.header("X-API-Key");
-
-  if (!apiKey || apiKey !== process.env.API_KEY) {
-    return res.status(401).json({ error: "Missing or invalid API key" });
-  }
-  next();
-});
-
 // Level 4: GET /bookings - List a person's bookings with cursor pagination
 app.get("/bookings", async (req, res) => {
   try {
@@ -137,12 +165,15 @@ app.get("/bookings", async (req, res) => {
     let query = supabase
       .from("bookings")
       .select("*")
-      .ilike("email", email) //email match ignores case
-      .order("created_at", { ascending: true }) //oldest first
+      .eq("email", email.trim().toLowerCase()) //email match ignores case
+      .order("seq", { ascending: true }) //oldest first
       .limit(limit + 1);
 
-    if (cursor && typeof cursor === "string") {
-      query = query.gt("created_at", cursor);
+    if (typeof cursor === "string" && cursor !== "") {
+      if (!/^\d+$/.test(cursor)) {
+        return res.status(400).json({ error: "Invalid cursor" });
+      }
+      query = query.gt("seq", Number(cursor));
     }
 
     const { data, error } = await query;
@@ -156,7 +187,7 @@ app.get("/bookings", async (req, res) => {
     //received more items than our limit?, next page exists.
     if (data.length > limit) {
       const lastItem = data[limit - 1];
-      next_cursor = lastItem.created_at; //timestamp of last valid item as the cursor
+      next_cursor = String(lastItem.seq); //counter number of the last item we return
       bookingsToReturn = data.slice(0, limit); // slice off the extra item we fetched
     }
 
@@ -175,9 +206,28 @@ app.post("/bookings", async (req, res) => {
     const idempotencyKey = req.header("Idempotency-key");
     let { slot_id, name, email } = req.body ?? {};
 
-    // Level 2: Missing fields check
-    if (!slot_id || !name || !email) {
-      return res.status(400).json({ error: "Missing required fields" });
+    // Level 5: rate limit, runs before validation so failed attempts count too
+    const rawEmail = req.body?.email;
+    if (typeof rawEmail === "string" && rawEmail.trim() !== "") {
+      const wait = checkRateLimit(rawEmail.trim().toLowerCase());
+      if (wait > 0) {
+        res.set("Retry-After", String(wait));
+        return res
+          .status(429)
+          .json({ error: "Too many attempts, try again later" });
+      }
+    }
+
+    // Level 2: Missing, empty, or wrong-type fields
+    if (
+      typeof slot_id !== "string" ||
+      typeof name !== "string" ||
+      typeof email !== "string" ||
+      !slot_id.trim() ||
+      !name.trim() ||
+      !email.trim()
+    ) {
+      return res.status(400).json({ error: "Missing or invalid fields" });
     }
 
     // Level 2: Trim spaces and store email in lower case
@@ -203,18 +253,7 @@ app.post("/bookings", async (req, res) => {
       }
 
       if (existing) {
-        if (
-          // body matches perfectly?, return the exact same success response
-          existing.slot_id === slot_id &&
-          existing.name === name &&
-          existing.email === email
-        ) {
-          return res.status(201).json(toBooking(existing));
-        }
-        // if the key is reused but the body changed, reject it
-        return res
-          .status(422)
-          .json({ error: "Idempotency-Key reused with a different body" });
+        return replayOrReject(res, existing, { slot_id, name, email });
       }
     }
 
@@ -244,8 +283,21 @@ app.post("/bookings", async (req, res) => {
     if (error) {
       // Level 3 Preview: Our unique index triggers error code 23505 on race conditions
       if (error.code === "23505") {
+        // Maybe this "duplicate" is really my twin request that just won
+        if (idempotencyKey) {
+          const { data: winner } = await supabase
+            .from("bookings")
+            .select("*")
+            .eq("idempotency_key", idempotencyKey)
+            .maybeSingle();
+
+          if (winner) {
+            return replayOrReject(res, winner, { slot_id, name, email });
+          }
+        }
         return res.status(409).json({ error: "Slot already booked" });
       }
+
       return res.status(500).json({ error: error.message });
     }
 
