@@ -92,8 +92,9 @@ app.post("/reset", async (req, res) => {
 
 // Level 2: API Key Middleware (applies to all routes below this point)
 app.use((req, res, next) => {
-  const apikey = req.header("X-API-Key");
-  if (!apikey || apikey !== process.env.API_KEY) {
+  const apiKey = req.header("X-API-Key");
+
+  if (!apiKey || apiKey !== process.env.API_KEY) {
     return res.status(401).json({ error: "Missing or invalid API key" });
   }
   next();
@@ -169,6 +170,46 @@ app.get("/bookings/:id", async (req, res) => {
     if (!data) return res.status(404).json({ error: "booking not found" });
 
     return res.json(toBooking(data));
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Level 3: DELETE /bookings/:id - Cancel a booking
+app.delete("/bookings/:id", async (req, res) => {
+  try {
+    const bookingId = req.params.id;
+
+    const { data: existingBooking, error: fetchError } = await supabase
+      .from("bookings")
+      .select("*")
+      .eq("id", bookingId)
+      .maybeSingle();
+
+    if (fetchError) return res.status(500).json({ error: fetchError.message });
+    // 404 if no booking with that id
+    if (!existingBooking) {
+      return res.status(404).json({ error: "No booking with that id" });
+    }
+
+    // 409 if already cancelled
+    if (existingBooking.status === "cancelled") {
+      return res.status(409).json({ error: "Already cancelled" });
+    }
+
+    // Update status to 'cancelled'
+    const { data: updatedBooking, error: updateError } = await supabase
+      .from("bookings")
+      .update({ status: "cancelled" })
+      .eq("id", bookingId)
+      .select()
+      .single();
+
+    if (updateError) {
+      return res.status(500).json({ error: updateError.message });
+    }
+
+    return res.status(200).json(toBooking(updatedBooking));
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }
