@@ -9,6 +9,41 @@ app.use(express.json()); // read JSON request bodies
 
 const PORT = process.env.PORT || 3000;
 
+//postgres returns "2026-12-10T09:00:00+00:00", our spec wants "2026-12-10T09:00:00Z"
+const toSpecDate = (value: string) =>
+  new Date(value).toString().replace(".000Z", "Z");
+
+// Level 1: GET /slots - every slot, earliest first, optional provider filter
+app.get("/slots", async (req, res) => {
+  try {
+    let query = supabase
+      .from("slots")
+      .select("id, provider, start_time, end_time, bookings(status)")
+      .order("start_time", { ascending: true })
+      .order("id", { ascending: true });
+
+    const { provider } = req.query;
+    if (typeof provider === "string") query = query.eq("provider", provider);
+
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+
+    const slots = data.map((slot) => ({
+      id: slot.id,
+      provider: slot.provider,
+      start: toSpecDate(slot.start_time),
+      end: toSpecDate(slot.end_time),
+      available: !slot.bookings.some(
+        (booking: { status: string }) => booking.status === "confirmed",
+      ),
+    }));
+
+    return res.json({ slots });
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 app.get("/health", (req, res) => {
   res.json({ status: "API is running" });
 });
