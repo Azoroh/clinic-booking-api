@@ -13,6 +13,60 @@ const PORT = process.env.PORT || 3000;
 const toSpecDate = (value: string) =>
   new Date(value).toString().replace(".000Z", "Z");
 
+//booking object from the spec
+const toBooking = (row: {
+  id: string;
+  slot_id: string;
+  name: string;
+  email: string;
+  status: string;
+  created_at: string;
+}) => ({
+  id: row.id,
+  slot_id: row.slot_id,
+  name: row.name,
+  email: row.email,
+  status: row.status,
+  created_at: new Date(row.created_at).toISOString(),
+});
+
+// Level 1: POST /bookings - book a slot
+app.post("/bookings", async (req, res) => {
+  try {
+    const { slot_id, name, email } = req.body ?? {};
+
+    const { data, error } = await supabase
+      .from("bookings")
+      .insert({ slot_id, name, email })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    return res.status(201).json(toBooking(data));
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Level 1: GET /bookings/:id - look up one booking
+app.get("/bookings/:id", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("bookings")
+      .select()
+      .eq("id", req.params.id)
+      .maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "booking not found" });
+
+    return res.json(toBooking(data));
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Level 1: GET /slots - every slot, earliest first, optional provider filter
 app.get("/slots", async (req, res) => {
   try {
