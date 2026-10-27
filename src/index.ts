@@ -1,3 +1,4 @@
+import cors from "cors";
 import express from "express";
 import type { Response } from "express";
 import dotenv from "dotenv";
@@ -6,6 +7,16 @@ import { supabase } from "./supabase.js";
 dotenv.config();
 
 const app = express();
+
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "X-API-Key", "Idempotency-Key"],
+    exposedHeaders: ["Retry-After"],
+  }),
+);
+
 app.use(express.json()); // read JSON request bodies
 
 const WINDOW_MS = 60_000;
