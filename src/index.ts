@@ -1,11 +1,23 @@
 import express from "express";
 import dotenv from "dotenv";
+import rateLimit from "express-rate-limit";
 import { supabase } from "./supabase.js";
 
 dotenv.config();
 
 const app = express();
 app.use(express.json()); // read JSON request bodies
+
+// Level 5: Global Rate Limiting (10 requests per minute)
+const limiter = rateLimit({
+  windowMs: 60 * 10000, //1 minute window
+  max: 10, //limit each IP to 10 requests per window
+  message: { error: "Too many requests, please try again later." },
+  standardHeaders: true, //return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, //disable the `X-RateLimit-*` headers
+});
+
+app.use(limiter);
 
 const PORT = process.env.PORT || 3000;
 
