@@ -30,74 +30,6 @@ const toBooking = (row: {
   created_at: new Date(row.created_at).toISOString(),
 });
 
-// Level 1: POST /bookings - book a slot
-app.post("/bookings", async (req, res) => {
-  try {
-    const { slot_id, name, email } = req.body ?? {};
-
-    const { data, error } = await supabase
-      .from("bookings")
-      .insert({ slot_id, name, email })
-      .select()
-      .single();
-
-    if (error) return res.status(500).json({ error: error.message });
-
-    return res.status(201).json(toBooking(data));
-  } catch (error) {
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// Level 1: GET /bookings/:id - look up one booking
-app.get("/bookings/:id", async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("bookings")
-      .select()
-      .eq("id", req.params.id)
-      .maybeSingle();
-
-    if (error) return res.status(500).json({ error: error.message });
-    if (!data) return res.status(404).json({ error: "booking not found" });
-
-    return res.json(toBooking(data));
-  } catch (error) {
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// Level 1: GET /slots - every slot, earliest first, optional provider filter
-app.get("/slots", async (req, res) => {
-  try {
-    let query = supabase
-      .from("slots")
-      .select("id, provider, start_time, end_time, bookings(status)")
-      .order("start_time", { ascending: true })
-      .order("id", { ascending: true });
-
-    const { provider } = req.query;
-    if (typeof provider === "string") query = query.eq("provider", provider);
-
-    const { data, error } = await query;
-    if (error) return res.status(500).json({ error: error.message });
-
-    const slots = data.map((slot) => ({
-      id: slot.id,
-      provider: slot.provider,
-      start: toSpecDate(slot.start_time),
-      end: toSpecDate(slot.end_time),
-      available: !slot.bookings.some(
-        (booking: { status: string }) => booking.status === "confirmed",
-      ),
-    }));
-
-    return res.json({ slots });
-  } catch (error) {
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
 app.get("/health", (req, res) => {
   res.json({ status: "API is running" });
 });
@@ -155,6 +87,121 @@ app.post("/reset", async (req, res) => {
     return res.status(200).json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Level 2: API Key Middleware (applies to all routes below this point)
+app.use((req, res, next) => {
+  const apikey = req.header("X-API-Key");
+  if (!apikey || apikey !== process.env.API_KEY) {
+    return res.status(401).json({ error: "Missing or invalid API key" });
+  }
+  next();
+});
+
+// Level 1-3: POST /bookings - book a slot
+app.post("/bookings", async (req, res) => {
+  try {
+    let { slot_id, name, email } = req.body ?? {};
+
+    // Level 2: Missing fields check
+    if (!slot_id || !name || !email) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Level 2: Trim spaces and store email in lower case
+    name = name.trim();
+    email = email.trim().toLowerCase();
+
+    // email validation and empty string check
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email) || name === "") {
+      return res.status(400).json({ error: "Invalid name or email format" });
+    }
+
+    // Level 2: Check if slot exists and has not started yet
+    const { data: slot, error: slotError } = await supabase
+      .from("slots")
+      .select("*")
+      .eq("id", slot_id)
+      .maybeSingle();
+
+    if (slotError) return res.status(500).json({ error: slotError.message });
+    if (!slot) return res.status(404).json({ error: "Slot not found" });
+
+    const now = new Date();
+    const startTime = new Date(slot.start_time);
+    if (startTime <= now) {
+      return res.status(400).json({ error: "Slot has already started" });
+    }
+
+    // Insert booking
+    const { data, error } = await supabase
+      .from("bookings")
+      .insert({ slot_id, name, email })
+      .select()
+      .single();
+
+    if (error) {
+      // Level 3 Preview: Our unique index triggers error code 23505 on race conditions
+      if (error.code === "23505") {
+        return res.status(409).json({ error: "Slot already booked" });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.status(201).json(toBooking(data));
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Level 1: GET /bookings/:id - looking up a single booking
+app.get("/bookings/:id", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("bookings")
+      .select()
+      .eq("id", req.params.id)
+      .maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "booking not found" });
+
+    return res.json(toBooking(data));
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Level 1: GET /slots - every slot, earliest first, optional provider filter
+app.get("/slots", async (req, res) => {
+  try {
+    let query = supabase
+      .from("slots")
+      .select("id, provider, start_time, end_time, bookings(status)")
+      .order("start_time", { ascending: true })
+      .order("id", { ascending: true });
+
+    const { provider } = req.query;
+    if (typeof provider === "string") query = query.eq("provider", provider);
+
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+
+    const slots = data.map((slot) => ({
+      id: slot.id,
+      provider: slot.provider,
+      start: toSpecDate(slot.start_time),
+      end: toSpecDate(slot.end_time),
+      available: !slot.bookings.some(
+        (booking: { status: string }) => booking.status === "confirmed",
+      ),
+    }));
+
+    return res.json({ slots });
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
