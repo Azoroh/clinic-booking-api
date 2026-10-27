@@ -100,9 +100,67 @@ app.use((req, res, next) => {
   next();
 });
 
-// Level 1-3: POST /bookings - book a slot
+// Level 4: GET /bookings - List a person's bookings with cursor pagination
+app.get("/bookings", async (req, res) => {
+  try {
+    const { email, cursor } = req.query;
+    let limit = 10; //spec defaults to 10, so we use 10
+
+    //validate email
+    if (!email || typeof email !== "string") {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    //validate limit (1 to 50)
+    if (req.query.limit !== undefined) {
+      const parsedLimit = parseInt(req.query.limit as string, 10);
+      if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
+        return res.status(400).json({ error: "Invalid limit" });
+      }
+      limit = parsedLimit;
+    }
+
+    //build the query
+    //we request 'limit + 1' from supabase to check if there is a 'next page'
+    let query = supabase
+      .from("bookings")
+      .select("*")
+      .ilike("email", email) //email match ignores case
+      .order("created_at", { ascending: true }) //oldest first
+      .limit(limit + 1);
+
+    if (cursor && typeof cursor === "string") {
+      query = query.gt("created_at", cursor);
+    }
+
+    const { data, error } = await query;
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    //handle pagination logic
+    let next_cursor = null;
+    let bookingsToReturn = data;
+
+    //received more items than our limit?, next page exists.
+    if (data.length > limit) {
+      const lastItem = data[limit - 1];
+      next_cursor = lastItem.created_at; //timestamp of last valid item as the cursor
+      bookingsToReturn = data.slice(0, limit); // slice off the extra item we fetched
+    }
+
+    return res.status(200).json({
+      bookings: bookingsToReturn.map(toBooking),
+      next_cursor,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Level 1-5: POST /bookings - book a slot
 app.post("/bookings", async (req, res) => {
   try {
+    const idempotencyKey = req.header("Idempotency-key");
     let { slot_id, name, email } = req.body ?? {};
 
     // Level 2: Missing fields check
@@ -118,6 +176,34 @@ app.post("/bookings", async (req, res) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email) || name === "") {
       return res.status(400).json({ error: "Invalid name or email format" });
+    }
+
+    // Level 4: Idempotency Check
+    if (idempotencyKey) {
+      const { data: existing, error: existError } = await supabase
+        .from("bookings")
+        .select("*")
+        .eq("idempotency_key", idempotencyKey)
+        .maybeSingle();
+
+      if (existError) {
+        return res.status(500).json({ error: existError.message });
+      }
+
+      if (existing) {
+        if (
+          // body matches perfectly?, return the exact same success response
+          existing.slot_id === slot_id &&
+          existing.name === name &&
+          existing.email === email
+        ) {
+          return res.status(201).json(toBooking(existing));
+        }
+        // if the key is reused but the body changed, reject it
+        return res
+          .status(422)
+          .json({ error: "Idempotency-Key reused with a different body" });
+      }
     }
 
     // Level 2: Check if slot exists and has not started yet
@@ -136,10 +222,10 @@ app.post("/bookings", async (req, res) => {
       return res.status(400).json({ error: "Slot has already started" });
     }
 
-    // Insert booking
+    // Insert booking, save idempotency key if provided
     const { data, error } = await supabase
       .from("bookings")
-      .insert({ slot_id, name, email })
+      .insert({ slot_id, name, email, idempotency_key: idempotencyKey || null })
       .select()
       .single();
 
