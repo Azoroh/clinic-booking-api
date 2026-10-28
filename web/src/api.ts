@@ -24,7 +24,7 @@ export type BookResult =
       retryAfter?: number;
     };
 
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL = String(import.meta.env.VITE_API_URL ?? "").replace(/\/+$/, "");
 const API_KEY = import.meta.env.VITE_API_KEY;
 
 //all call go through here, so the API key header is added in one place
