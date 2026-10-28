@@ -84,6 +84,15 @@ app.get("/health", (req, res) => {
   res.json({ status: "API is running" });
 });
 
+// Pinged by the uptime monitor. It also touches the database so Supabase doesn't pause for inactivity.
+app.get("/health/db", async (req, res) => {
+  const { error } = await supabase.from("slots").select("id").limit(1);
+  if (error) {
+    return res.status(503).json({ error: "Database unreachable" });
+  }
+  return res.json({ status: "API and database are running" });
+});
+
 // Level 2: API Key Middleware (applies to all routes below this point)
 app.use((req, res, next) => {
   const apiKey = req.header("X-API-Key");
