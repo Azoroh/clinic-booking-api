@@ -59,3 +59,88 @@ button:disabled {
   border: 1px solid #f5c2c0;
   border-radius: 10px;
 }
+
+.form,
+.confirmation {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  background: #fff;
+  border: 1px solid #dde1e7;
+  border-radius: 10px;
+}
+
+.form h2,
+.form p,
+.confirmation h2 {
+  margin: 0;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+input {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #c4cad4;
+  border-radius: 8px;
+  font: inherit;
+}
+
+.actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+button.secondary {
+  background: #e6e9ee;
+  color: #1c2430;
+}
+
+button.secondary:disabled {
+  opacity: 0.6;
+}
+
+.error {
+  color: #b42318;
+}
+
+.notice {
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: #fff7e0;
+  border: 1px solid #f0d98a;
+  border-radius: 10px;
+}
+
+.confirmation {
+  justify-items: start;
+}
+
+.badge {
+  padding: 0.15rem 0.6rem;
+  background: #e3f6ea;
+  color: #166534;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  text-transform: capitalize;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0;
+}
+
+dt {
+  color: #5b6574;
+}
+
+dd {
+  margin: 0;
+  word-break: break-all;
+}

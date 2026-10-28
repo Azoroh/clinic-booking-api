@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { getSlots, type Slot } from "./api";
+import { getSlots, type Booking, type Slot } from "./api";
 import SlotList from "./SlotList";
+import BookingForm from "./BookingForm";
+import Confirmation from "./Confirmation";
 
 export default function App() {
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<Slot | null>(null);
+  const [booking, setBooking] = useState<Booking | null>(null);
+  const [notice, setNotice] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -22,6 +26,19 @@ export default function App() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  function handleSlotGone(message: string) {
+    setSelected(null);
+    setNotice(message);
+    refresh();
+  }
+
+  function handleDone() {
+    setBooking(null);
+    setSelected(null);
+    setNotice("");
+    refresh();
+  }
 
   return (
     <main className="app">
@@ -43,17 +60,31 @@ export default function App() {
         </div>
       )}
 
-      {!loading && !error && !selected && (
-        <SlotList slots={slots} onSelect={setSelected} />
+      {!loading && !error && booking && selected && (
+        <Confirmation booking={booking} slot={selected} onDone={handleDone} />
       )}
 
-      {!loading && !error && selected && (
-        <div>
-          <p>
-            You picked {selected.provider} ({selected.id}). The form comes next.
-          </p>
-          <button onClick={() => setSelected(null)}>Back</button>
-        </div>
+      {!loading && !error && !booking && selected && (
+        <BookingForm
+          key={selected.id}
+          slot={selected}
+          onBack={() => setSelected(null)}
+          onBooked={setBooking}
+          onSlotGone={handleSlotGone}
+        />
+      )}
+
+      {!loading && !error && !booking && !selected && (
+        <>
+          {notice && <div className="notice">{notice}</div>}
+          <SlotList
+            slots={slots}
+            onSelect={(slot) => {
+              setNotice("");
+              setSelected(slot);
+            }}
+          />
+        </>
       )}
     </main>
   );
