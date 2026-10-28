@@ -4,15 +4,15 @@ A booking API for a clinic, plus a small web page that uses it. Patients see the
 
 ## Live links
 
-|               |                                 |
-| ------------- | ------------------------------- |
-| API base URL  | `https://YOUR-API.onrender.com` |
-| Web page      | `https://YOUR-PAGE.vercel.app`  |
-| Spec followed | koyaacademy.com/assessment-api  |
+|               |                                                |
+| ------------- | ---------------------------------------------- |
+| API base URL  | `https://clinic-booking-api-a9sj.onrender.com` |
+| Web page      | `https://clinic-booking-api-red.vercel.app/`   |
+| Spec followed | koyaacademy.com/assessment-api                 |
 
 The API key is shared through the assessment form and is not committed to this repo.
 
-The API runs on a free Render instance, which sleeps after about 15 minutes without traffic. The first request after a quiet spell can take up to a minute. An uptime monitor pings `GET /health` (no key needed) every 10 minutes to reduce this.
+The API runs on a free Render instance, which sleeps after about 15 minutes without traffic. The first request after a quiet spell can take up to a minute. An uptime monitor pings `GET /health/db` every 5 minutes. That keeps the instance awake and gives the Supabase project regular activity so it does not pause. `GET /health` is the same check without the database query.
 
 ## Stack
 
@@ -42,6 +42,7 @@ The API runs on a free Render instance, which sleeps after about 15 minutes with
 | GET    | `/bookings?email=` | 4      | 200     | 400, 401                     |
 | DELETE | `/bookings/{id}`   | 3      | 200     | 401, 404, 409                |
 | GET    | `/health`          | n/a    | 200     | none, no key needed          |
+| GET    | `/health/db`       | n/a    | 200     | 503, no key needed           |
 
 Every error response has the shape `{"error": "<message>"}`.
 
