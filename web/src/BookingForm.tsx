@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { bookSlot, type Booking, type Slot } from "./api";
 import { formatSlotTime } from "./format";
 
@@ -9,23 +9,61 @@ type Props = {
   onSlotGone: (message: string) => void;
 };
 
+type FormState = {
+  name: string;
+  email: string;
+  key: string;
+  error: string;
+};
+
+const initialState: FormState = { name: "", email: "", key: "", error: "" };
+
 export default function BookingForm({
   slot,
   onBack,
   onBooked,
   onSlotGone,
 }: Props) {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
   const [cooldown, setCooldown] = useState(0);
 
-  // One key per distinct request body: retries reuse it, edits get a new one
-  const keyRef = useRef(crypto.randomUUID());
-  const rotateKey = () => {
-    keyRef.current = crypto.randomUUID();
-  };
+  const [state, formAction, isPending] = useActionState(
+    async (prev: FormState, formData: FormData): Promise<FormState> => {
+      const name = String(formData.get("name") ?? "");
+      const email = String(formData.get("email") ?? "");
+
+      // Same body as the last attempt: reuse its key. Edited body: new key.
+      const key =
+        prev.key && prev.name === name && prev.email === email
+          ? prev.key
+          : crypto.randomUUID();
+
+      const next = (error = ""): FormState => ({ name, email, key, error });
+
+      if (cooldown > 0) return next(prev.error);
+
+      const result = await bookSlot({ slot_id: slot.id, name, email }, key);
+
+      if (result.ok) {
+        onBooked(result.booking);
+        return next();
+      }
+
+      switch (result.kind) {
+        case "taken":
+          onSlotGone("Someone just booked that slot. Please pick another.");
+          return next();
+        case "not_found":
+          onSlotGone("That slot no longer exists. Please pick another.");
+          return next();
+        case "rate_limited":
+          setCooldown(result.retryAfter ?? 60);
+          return next("Too many attempts for this email.");
+        default:
+          return next(result.message);
+      }
+    },
+    initialState,
+  );
 
   // Counts the rate-limit cooldown down once per second
   useEffect(() => {
@@ -34,52 +72,16 @@ export default function BookingForm({
     return () => clearTimeout(timer);
   }, [cooldown]);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (submitting || cooldown > 0) return;
-
-    setSubmitting(true);
-    setError("");
-    const result = await bookSlot(
-      { slot_id: slot.id, name, email },
-      keyRef.current,
-    );
-    setSubmitting(false);
-
-    if (result.ok) {
-      onBooked(result.booking);
-      return;
-    }
-
-    switch (result.kind) {
-      case "taken":
-        onSlotGone("Someone just booked that slot. Please pick another.");
-        break;
-      case "not_found":
-        onSlotGone("That slot no longer exists. Please pick another.");
-        break;
-      case "rate_limited":
-        setError("Too many attempts for this email.");
-        setCooldown(result.retryAfter ?? 60);
-        break;
-      default:
-        setError(result.message);
-    }
-  }
-
   return (
-    <form onSubmit={handleSubmit} className="form">
+    <form action={formAction} className="form">
       <h2>{slot.provider}</h2>
       <p>{formatSlotTime(slot.start, slot.end)}</p>
 
       <label>
         Full name
         <input
-          value={name}
-          onChange={(e) => {
-            setName(e.target.value);
-            rotateKey();
-          }}
+          name="name"
+          defaultValue={state.name}
           autoComplete="name"
           required
         />
@@ -88,20 +90,17 @@ export default function BookingForm({
       <label>
         Email
         <input
+          name="email"
           type="email"
-          value={email}
-          onChange={(e) => {
-            setEmail(e.target.value);
-            rotateKey();
-          }}
+          defaultValue={state.email}
           autoComplete="email"
           required
         />
       </label>
 
-      {error && (
+      {state.error && (
         <p className="error" role="alert">
-          {error}
+          {state.error}
         </p>
       )}
 
@@ -110,12 +109,12 @@ export default function BookingForm({
           type="button"
           className="secondary"
           onClick={onBack}
-          disabled={submitting}
+          disabled={isPending}
         >
           Back
         </button>
-        <button type="submit" disabled={submitting || cooldown > 0}>
-          {submitting
+        <button type="submit" disabled={isPending || cooldown > 0}>
+          {isPending
             ? "Booking..."
             : cooldown > 0
               ? `Try again in ${cooldown}s`
